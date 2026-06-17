@@ -1,0 +1,25 @@
+{
+  "clients": {
+    "enlightened_baby": {
+      "name": "Enlightened Baby",
+      "domain": "enlightened-baby-tx.myshopify.com",
+      "api_version": "2026-04",
+      "token_secret": "shopify-token-enlightened-baby",
+      "locations": ["Austin Store"]
+    },
+    "kindred_spirits": {
+      "name": "Kindred Spirits",
+      "domain": "fusvjz-ez.myshopify.com",
+      "api_version": "2026-04",
+      "token_secret": "shopify-token-kindred-spirits",
+      "locations": ["Shop location"]
+    },
+    "kick_pleat": {
+      "name": "Kick Pleat",
+      "domain": "kick-pleat.myshopify.com",
+      "api_version": "2026-04",
+      "token_secret": "shopify-token-kick-pleat",
+      "locations": ["Kick Pleat Austin", "Kick Pleat Dallas", "Kick Pleat Houston"]
+    }
+  }
+}

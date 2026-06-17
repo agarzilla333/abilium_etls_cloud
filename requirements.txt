@@ -1,0 +1,17 @@
+# Web service
+python-dotenv==1.0.1
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+
+# Data
+pandas==2.2.3
+numpy==2.2.1
+
+# Shopify Admin API (GraphQL) over HTTP
+requests==2.32.3
+
+# Google: Sheets + Drive, ID-token verification, Secret Manager
+google-api-python-client==2.156.0
+google-auth==2.37.0
+google-cloud-secret-manager==2.21.1

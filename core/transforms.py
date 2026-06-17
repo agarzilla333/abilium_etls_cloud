@@ -1,0 +1,219 @@
+"""Pandas transforms ported from the original monthly scripts.
+
+Input is a DataFrame whose columns are the analytics-UI CSV headers (produced by
+``shopify_client``). Output is a ``Report``: ordered, Sheet-ready tabs plus pie
+``ChartSpec``s. The aggregation logic is preserved verbatim from
+``process_sales_by_location_monthly.py`` and ``process_inventory_monthly.py``;
+only the input (was ``pd.read_csv``) and the output (was ``pd.ExcelWriter``)
+change.
+"""
+from __future__ import annotations
+
+import collections
+import re
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from typing import List
+
+import numpy as np
+import pandas as pd
+
+# --- Column headers (must match shopify_client.FIELD_TO_HEADER values exactly) ---
+NET_SALES = "Net sales"
+PRODUCT_VENDOR = "Product vendor"
+PRODUCT_TYPE = "Product type"
+SALES_CHANNEL = "Sales channel"
+TITLE_AT_SALE = "Product title at time of sale"
+PRODUCT_TITLE = "Product title"
+
+INV_UNITS = "Ending inventory units (at location)"
+INV_RETAIL = "Ending inventory retail value (at location)"
+VARIANT_TITLE = "Product variant title"
+VARIANT_SKU = "Product variant SKU"
+
+
+@dataclass(frozen=True)
+class ChartSpec:
+    """A pie chart on ``tab``: one slice per ``label_col`` row, sized by ``value_col``."""
+    tab: str
+    title: str
+    label_col: str
+    value_col: str
+    max_slices: int = 12
+
+
+@dataclass
+class Report:
+    kind: str  # "sales" | "inventory"
+    tabs: "OrderedDict[str, pd.DataFrame]" = field(default_factory=OrderedDict)
+    charts: List[ChartSpec] = field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
+# Sales
+# --------------------------------------------------------------------------- #
+def _mode_first(s: pd.Series):
+    """Return the first mode (most frequent) value or NaN."""
+    m = s.mode(dropna=True)
+    return m.iat[0] if len(m) else np.nan
+
+
+def _build_vendor_regex(vendors) -> str:
+    """Match any vendor as a standalone token-ish span (bounded by non-alphanumerics)
+    to reduce false positives like 'ob' in 'job'. Longest-first so longer names win."""
+    vendors = sorted(vendors, key=len, reverse=True)
+    parts = [rf"(?<![A-Za-z0-9]){re.escape(v)}(?![A-Za-z0-9])" for v in vendors]
+    return "(" + "|".join(parts) + ")"
+
+
+def _sales_group(df: pd.DataFrame, key: str, label: str) -> pd.DataFrame:
+    """units = 1 per row (group size); total = sum of Net sales; sorted desc."""
+    g = (
+        df.groupby(key, dropna=False)[NET_SALES]
+        .agg(units="size", total="sum")
+        .sort_values("total", ascending=False)
+        .reset_index()
+    )
+    g[key] = g[key].astype(str)
+    g.columns = [label, "Units", "Total Sales"]
+    return g
+
+
+def sales_by_location(df: pd.DataFrame) -> Report:
+    df = df.copy()
+
+    # Normalize key text fields once (vectorized).
+    title_key = df[TITLE_AT_SALE].astype(str).str.strip().str.lower()
+    product_title_key = df[PRODUCT_TITLE].astype(str).str.strip().str.lower()
+    vendor_clean = (
+        df[PRODUCT_VENDOR]
+        .where(df[PRODUCT_VENDOR].apply(lambda x: isinstance(x, str)))
+        .str.strip()
+        .str.lower()
+    )
+
+    # 1) Learn title_at_time -> most common vendor among rows that DO have a vendor.
+    title_to_vendor = (
+        pd.DataFrame({"title_key": title_key, "vendor": vendor_clean})
+        .dropna(subset=["vendor"])
+        .groupby("title_key")["vendor"]
+        .apply(_mode_first)
+    )
+    vendor_filled = vendor_clean.copy()
+    missing = vendor_filled.isna()
+    vendor_filled.loc[missing] = title_key.loc[missing].map(title_to_vendor)
+
+    # 2) Fallback: regex over known vendors, against title then product title.
+    vendor_vocab = vendor_clean.dropna().unique().tolist()
+    if vendor_vocab:
+        vendor_regex = _build_vendor_regex(vendor_vocab)
+        still_missing = vendor_filled.isna()
+        if still_missing.any():
+            vendor_filled.loc[still_missing] = title_key.loc[still_missing].str.extract(
+                vendor_regex, expand=False
+            )
+        still_missing = vendor_filled.isna()
+        if still_missing.any():
+            vendor_filled.loc[still_missing] = product_title_key.loc[still_missing].str.extract(
+                vendor_regex, expand=False
+            )
+
+    # Anything still missing -> bucket so we never drop sales rows.
+    df["vendor_final"] = vendor_filled.fillna("unknown")
+
+    report = Report(kind="sales")
+    report.tabs["By Vendor"] = _sales_group(df, "vendor_final", "Vendor")
+    report.tabs["By Product"] = _sales_group(df, PRODUCT_TYPE, "Product Type")
+    report.tabs["By Channel"] = _sales_group(df, SALES_CHANNEL, "Sales Channel")
+    report.charts = [
+        ChartSpec("By Vendor", "Total Sales by Vendor", "Vendor", "Total Sales"),
+        ChartSpec("By Product", "Sales by Product Type", "Product Type", "Total Sales"),
+        ChartSpec("By Channel", "Units by Channel", "Sales Channel", "Units"),
+    ]
+    return report
+
+
+# --------------------------------------------------------------------------- #
+# Inventory
+# --------------------------------------------------------------------------- #
+def _dedupe_inventory(df: pd.DataFrame) -> pd.DataFrame:
+    """Two-tier dedupe of duplicate Shopify listings (was commented-out in the
+    source). Exact dedupe by SKU where present; heuristic fallback for NaN-SKU
+    rows sharing (vendor, variant_title, per-unit retail). Can slightly
+    over-collapse — treat results as a lower bound until SKUs are populated."""
+    df = df.copy()
+    df["_per_unit"] = (df[INV_RETAIL] / df[INV_UNITS]).round(2)
+    with_sku = df[df[VARIANT_SKU].notna()].drop_duplicates(
+        subset=[PRODUCT_VENDOR, VARIANT_SKU, VARIANT_TITLE], keep="first"
+    )
+    without_sku = df[df[VARIANT_SKU].isna()].drop_duplicates(
+        subset=[PRODUCT_VENDOR, VARIANT_TITLE, "_per_unit"], keep="first"
+    )
+    return pd.concat([with_sku, without_sku], ignore_index=True).drop(columns=["_per_unit"])
+
+
+def _inv_group(df: pd.DataFrame, keys, labels) -> pd.DataFrame:
+    keys = list(keys)
+    g = (
+        df.groupby(keys, as_index=False)
+        .agg(units=(INV_UNITS, "sum"), retail=(INV_RETAIL, "sum"))
+        .sort_values("retail", ascending=False)
+        .reset_index(drop=True)
+    )
+    g.columns = list(labels) + ["Units", "Total Retail Value"]
+    return g
+
+
+def inventory_by_location(df: pd.DataFrame, *, dedupe: bool = False) -> Report:
+    """Port of InventoryData.get_inventory.
+
+    ``dedupe`` defaults to False to match the source script's current (commented-
+    out) behavior; retail values are then an upper bound. Enable once SKUs are
+    reliably populated upstream.
+    """
+    df = df.copy()
+    df.dropna(
+        subset=[PRODUCT_VENDOR, PRODUCT_TYPE, VARIANT_TITLE, INV_RETAIL, INV_UNITS],
+        inplace=True,
+    )
+    df[INV_UNITS] = pd.to_numeric(df[INV_UNITS], errors="coerce")
+    df[INV_RETAIL] = pd.to_numeric(df[INV_RETAIL], errors="coerce")
+    df.dropna(subset=[INV_UNITS, INV_RETAIL], inplace=True)
+    df[PRODUCT_VENDOR] = (
+        df[PRODUCT_VENDOR].astype(str).str.replace(r"[:*/\\]", " ", regex=True).str.lower()
+    )
+    df = df[(df[INV_RETAIL] != 0) & (df[INV_UNITS] > 0)].copy()
+
+    if dedupe:
+        df = _dedupe_inventory(df)
+
+    inventory_df = _inv_group(df, [PRODUCT_VENDOR], ["Designers"])
+    by_product_df = _inv_group(df, [PRODUCT_TYPE], ["Product Type"])
+    granular_df = _inv_group(
+        df, [PRODUCT_VENDOR, PRODUCT_TYPE, VARIANT_TITLE], ["Product Vendor", "Product Type", "Product Title"]
+    )
+
+    report = Report(kind="inventory")
+    report.tabs["inventory"] = inventory_df
+    report.tabs["by product"] = by_product_df
+
+    # One granular tab per designer, in inventory (retail desc) order.
+    for designer in inventory_df["Designers"]:
+        sub = granular_df[granular_df["Product Vendor"] == designer][
+            ["Product Type", "Product Title", "Units", "Total Retail Value"]
+        ].reset_index(drop=True)
+        report.tabs[str(designer)] = sub  # sheets_writer sanitizes/uniquifies tab names
+
+    report.charts = [
+        ChartSpec("inventory", "Retail Value by Designer", "Designers", "Total Retail Value"),
+        ChartSpec("by product", "Retail Value by Product Type", "Product Type", "Total Retail Value"),
+    ]
+    return report
+
+
+def build_report(kind: str, df: pd.DataFrame, *, dedupe: bool = False) -> Report:
+    if kind == "sales":
+        return sales_by_location(df)
+    if kind == "inventory":
+        return inventory_by_location(df, dedupe=dedupe)
+    raise KeyError(f"unknown report kind {kind!r}")

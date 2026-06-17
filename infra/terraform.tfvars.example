@@ -1,0 +1,22 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+
+project         = "abilium-etls"         # your GCP project id
+region          = "us-central1"
+image_tag       = "REPLACE"              # set per deploy via -var image_tag=$(git rev-parse --short HEAD)
+
+drive_folder_id = "REPLACE"              # Shared Drive folder id for output sheets
+oauth_client_id = "REPLACE.apps.googleusercontent.com"
+allowed_domain  = "abiliumtheagency.com"
+allowed_emails  = "adrianmgarza@gmail.com,glm0918@gmail.com"
+cors_origins    = "https://www.your-squarespace-site.com"
+summary_email   = "adrianmgarza@gmail.com"
+inventory_dedupe = false
+
+shopify_client_ids = {
+  enlightened_baby = "9ec43739dfaf4d17d4f897ec727c344a"
+  kindred_spirits  = "f86a4a2880f8d63770b3979631b527cb"
+  kick_pleat       = "d394f979c29a5cc6fad89e2a8440e5e5"
+}
+
+# Generate a random value, e.g.  openssl rand -hex 24
+run_all_token = "REPLACE_WITH_RANDOM_SECRET"

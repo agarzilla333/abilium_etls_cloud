@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Secrets / credentials — never commit
+*-sa-key.json
+service-account*.json
+secrets/
+clients.local.json
+
+# Build / outputs
+dist/
+build/
+*.xlsx
+data/outputs/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+!*.tfvars.example
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
