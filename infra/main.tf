@@ -66,6 +66,22 @@ resource "google_artifact_registry_repository" "app" {
   location      = var.region
   format        = "DOCKER"
   depends_on    = [google_project_service.apis]
+
+  # Keep storage tiny: retain the 5 newest images, auto-delete anything older.
+  cleanup_policies {
+    id     = "keep-recent-5"
+    action = "KEEP"
+    most_recent_versions {
+      keep_count = 5
+    }
+  }
+  cleanup_policies {
+    id     = "delete-old"
+    action = "DELETE"
+    condition {
+      older_than = "1209600s" # 14 days
+    }
+  }
 }
 
 # --- Service accounts ---
