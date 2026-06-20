@@ -82,6 +82,10 @@ def _sales_group(df: pd.DataFrame, key: str, label: str) -> pd.DataFrame:
 def sales_by_location(df: pd.DataFrame) -> Report:
     df = df.copy()
 
+    # The ShopifyQL API returns all cells as strings; coerce the money column so
+    # groupby .sum() adds instead of concatenating. (CSV input was auto-typed.)
+    df[NET_SALES] = pd.to_numeric(df[NET_SALES], errors="coerce")
+
     # Normalize key text fields once (vectorized).
     title_key = df[TITLE_AT_SALE].astype(str).str.strip().str.lower()
     product_title_key = df[PRODUCT_TITLE].astype(str).str.strip().str.lower()
@@ -127,8 +131,8 @@ def sales_by_location(df: pd.DataFrame) -> Report:
     report.tabs["By Channel"] = _sales_group(df, SALES_CHANNEL, "Sales Channel")
     report.charts = [
         ChartSpec("By Vendor", "Total Sales by Vendor", "Vendor", "Total Sales"),
-        ChartSpec("By Product", "Sales by Product Type", "Product Type", "Total Sales"),
-        ChartSpec("By Channel", "Units by Channel", "Sales Channel", "Units"),
+        ChartSpec("By Product", "Total Sales by Product Type", "Product Type", "Total Sales"),
+        ChartSpec("By Channel", "Total Sales by Sales Channel", "Sales Channel", "Total Sales"),
     ]
     return report
 
@@ -197,8 +201,8 @@ def inventory_by_location(df: pd.DataFrame, *, dedupe: bool = False) -> Report:
     report.tabs["inventory"] = inventory_df
     report.tabs["by product"] = by_product_df
 
-    # One granular tab per designer, in inventory (retail desc) order.
-    for designer in inventory_df["Designers"]:
+    # One granular tab per designer, alphabetical (after the inventory + by product tabs).
+    for designer in sorted(inventory_df["Designers"], key=lambda s: str(s).lower()):
         sub = granular_df[granular_df["Product Vendor"] == designer][
             ["Product Type", "Product Title", "Units", "Total Retail Value"]
         ].reset_index(drop=True)

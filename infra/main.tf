@@ -53,6 +53,8 @@ resource "google_project_service" "apis" {
     "artifactregistry.googleapis.com",
     "cloudscheduler.googleapis.com",
     "iam.googleapis.com",
+    "drive.googleapis.com",
+    "sheets.googleapis.com",
   ])
   service            = each.value
   disable_on_destroy = false

@@ -21,6 +21,10 @@ from typing import List, Optional
 # DURING values offered in the UI dropdown (native ShopifyQL keywords).
 DURING_CHOICES = ["last_month", "this_month", "last_year", "this_year", "today"]
 
+# shopifyqlQuery caps results at 1000 rows unless an explicit LIMIT is given, so
+# every query sets a high LIMIT to fetch the full result set.
+ROW_LIMIT = 1000000
+
 
 @dataclass(frozen=True)
 class ReportSpec:
@@ -29,6 +33,9 @@ class ReportSpec:
     group_by: List[str]
     default_during: str
     order_by: Optional[str] = None
+    # Location column differs per dataset; None = no location filter (store-wide,
+    # which for sales also includes online orders that have no POS location).
+    location_column: Optional[str] = "inventory_location_name"
 
 
 REPORTS = {
@@ -47,6 +54,7 @@ REPORTS = {
             "product_vendor",
         ],
         default_during="last_month",
+        location_column=None,  # sales is store-wide on purpose: includes online (no POS location)
     ),
     "inventory": ReportSpec(
         dataset="inventory_by_location",
@@ -67,11 +75,11 @@ REPORTS = {
 }
 
 
-def _location_filter(locations: List[str]) -> str:
+def _location_filter(locations: List[str], column: str) -> str:
     if not locations:
         raise ValueError("at least one location is required")
     quoted = ", ".join("'" + loc.replace("'", "''") + "'" for loc in locations)
-    return f"WHERE inventory_location_name IN ({quoted})"
+    return f"WHERE {column} IN ({quoted})"
 
 
 def build(report: str, locations: List[str], during: Optional[str] = None) -> str:
@@ -85,9 +93,11 @@ def build(report: str, locations: List[str], during: Optional[str] = None) -> st
         f"FROM {spec.dataset}",
         "  SHOW " + ", ".join(spec.show),
         "  GROUP BY " + ", ".join(spec.group_by),
-        "  " + _location_filter(locations),
-        f"  DURING {during}",
     ]
+    if spec.location_column:
+        parts.append("  " + _location_filter(locations, spec.location_column))
+    parts.append(f"  DURING {during}")
     if spec.order_by:
         parts.append(f"  ORDER BY {spec.order_by}")
+    parts.append(f"  LIMIT {ROW_LIMIT}")
     return "\n".join(parts)

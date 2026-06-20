@@ -31,15 +31,15 @@ def send_summary(results: List[RunResult], failures: List[str]) -> None:
     body = _body(results, failures)
 
     host = os.environ.get("SMTP_HOST")
-    to_addr = os.environ.get("SUMMARY_EMAIL")
-    if not host or not to_addr:
+    to_addrs = [a.strip() for a in (os.environ.get("SUMMARY_EMAIL") or "").split(",") if a.strip()]
+    if not host or not to_addrs:
         log.info("email not configured; summary follows:\n%s\n%s", subject, body)
         return
 
     msg = EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = os.environ.get("SMTP_FROM", to_addr)
-    msg["To"] = to_addr
+    msg["From"] = os.environ.get("SMTP_FROM", to_addrs[0])
+    msg["To"] = ", ".join(to_addrs)  # comma-separated SUMMARY_EMAIL -> all recipients
     msg.set_content(body)
 
     with smtplib.SMTP(host, int(os.environ.get("SMTP_PORT", "587"))) as s:
@@ -48,4 +48,4 @@ def send_summary(results: List[RunResult], failures: List[str]) -> None:
         if user and pwd:
             s.login(user, pwd)
         s.send_message(msg)
-    log.info("summary emailed to %s", to_addr)
+    log.info("summary emailed to %s", ", ".join(to_addrs))

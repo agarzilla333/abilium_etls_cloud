@@ -21,6 +21,9 @@ SCOPES = [
 ]
 _SHEETS_MIME = "application/vnd.google-apps.spreadsheet"
 
+# Columns formatted as currency ($#,##0.00) in the output sheet.
+_MONEY_COLUMNS = {"Total Sales", "Total Retail Value"}
+
 # Chars Google Sheets disallows in a tab title.
 _BAD_TAB_CHARS = re.compile(r"[:\\/?*\[\]]")
 
@@ -95,8 +98,29 @@ class SheetsWriter:
                 body={"valueInputOption": "RAW", "data": value_data},
             ).execute()
 
-        # 3) Add pie charts.
-        chart_requests = []
+        # 3) Format money columns as currency + bold header, then add pie charts.
+        requests = []
+        for key, df in report.tabs.items():
+            sid = sheet_ids[tab_titles[key]]
+            # bold the header row
+            requests.append({
+                "repeatCell": {
+                    "range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 1},
+                    "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
+                    "fields": "userEnteredFormat.textFormat.bold",
+                }
+            })
+            for ci, colname in enumerate(df.columns):
+                if colname in _MONEY_COLUMNS:
+                    requests.append({
+                        "repeatCell": {
+                            "range": {"sheetId": sid, "startRowIndex": 1, "endRowIndex": len(df) + 1,
+                                      "startColumnIndex": ci, "endColumnIndex": ci + 1},
+                            "cell": {"userEnteredFormat": {"numberFormat": {"type": "CURRENCY", "pattern": "$#,##0.00"}}},
+                            "fields": "userEnteredFormat.numberFormat",
+                        }
+                    })
+
         for chart in report.charts:
             df = report.tabs.get(chart.tab)
             if df is None or df.empty:
@@ -105,15 +129,41 @@ class SheetsWriter:
             label_idx = df.columns.get_loc(chart.label_col)
             value_idx = df.columns.get_loc(chart.value_col)
             n_rows = min(len(df), chart.max_slices)
-            chart_requests.append(
+            requests.append(
                 self._pie_request(chart.title, sid, label_idx, value_idx, n_rows, len(df.columns))
             )
-        if chart_requests:
+
+        if requests:
             self.sheets.spreadsheets().batchUpdate(
-                spreadsheetId=spreadsheet_id, body={"requests": chart_requests}
+                spreadsheetId=spreadsheet_id, body={"requests": requests}
             ).execute()
 
         return meta.get("webViewLink") or f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}"
+
+    def delete_reports(self, folder_id: str) -> int:
+        """Trash every report spreadsheet in the Shared Drive. Returns count.
+
+        Uses trash (not permanent delete) because the runtime SA is a Content
+        Manager, which can trash but not permanently delete in a Shared Drive.
+        Trashed sheets leave the Drive view and the Shared Drive trash auto-purges
+        after 30 days (or a Manager can empty it for immediate removal)."""
+        trashed, page = 0, None
+        while True:
+            resp = self.drive.files().list(
+                q=f"'{folder_id}' in parents and mimeType='{_SHEETS_MIME}' and trashed=false",
+                corpora="drive", driveId=folder_id,
+                includeItemsFromAllDrives=True, supportsAllDrives=True,
+                fields="nextPageToken, files(id)", pageSize=1000, pageToken=page,
+            ).execute()
+            for f in resp.get("files", []):
+                self.drive.files().update(
+                    fileId=f["id"], body={"trashed": True}, supportsAllDrives=True
+                ).execute()
+                trashed += 1
+            page = resp.get("nextPageToken")
+            if not page:
+                break
+        return trashed
 
     @staticmethod
     def _pie_request(title, sheet_id, label_idx, value_idx, n_rows, n_cols) -> dict:
@@ -134,7 +184,8 @@ class SheetsWriter:
                     "spec": {
                         "title": title,
                         "pieChart": {
-                            "legendPosition": "RIGHT_LEGEND",
+                            # LABELED_LEGEND labels each slice with its name + percentage on a leader line
+                            "legendPosition": "LABELED_LEGEND",
                             "domain": {"sourceRange": col_range(label_idx)},
                             "series": {"sourceRange": col_range(value_idx)},
                         },

@@ -12,12 +12,14 @@ from core.transforms import inventory_by_location, sales_by_location
 def test_queries():
     q = queries.build("sales", ["Kick Pleat Austin", "Kick Pleat Dallas"])
     assert "FROM sales" in q
-    assert "WHERE inventory_location_name IN ('Kick Pleat Austin', 'Kick Pleat Dallas')" in q
+    assert "WHERE" not in q  # sales is store-wide (includes online)
     assert "DURING last_month" in q
+    assert "LIMIT 1000000" in q
     assert "VISUALIZE" not in q and "WITH TOTALS" not in q
 
     inv = queries.build("inventory", ["Austin Store"])
     assert "FROM inventory_by_location" in inv
+    assert "WHERE inventory_location_name IN ('Austin Store')" in inv
     assert "DURING today" in inv
     print("queries: OK")
 

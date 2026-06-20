@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -23,6 +25,7 @@ class RunResult:
     during: str
     locations: List[str]
     url: str
+    title: str
 
 
 def run_report(
@@ -47,8 +50,9 @@ def run_report(
     df = run_shopifyql(client, query, session=session)
     rep = build_report(report, df, dedupe=dedupe)
 
+    date_str = datetime.now(ZoneInfo("America/Chicago")).strftime("%m-%d-%Y")
     suffix = "" if locs == client.locations else " — " + ", ".join(locs)
-    title = f"{client.name} — {report} — {during}{suffix}"
+    title = f"{client.name} — {report} — {during} — {date_str}{suffix}"
     url = (writer or SheetsWriter()).write(title, rep, folder_id)
 
-    return RunResult(client.key, client.name, report, during, locs, url)
+    return RunResult(client.key, client.name, report, during, locs, url, title)

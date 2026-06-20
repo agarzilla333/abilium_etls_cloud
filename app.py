@@ -116,7 +116,7 @@ class RunResponse(BaseModel):
 
 def _to_response(r: RunResult) -> RunResponse:
     return RunResponse(
-        url=r.url, title=f"{r.client_name} — {r.report} — {r.during}",
+        url=r.url, title=r.title,
         client=r.client_key, report=r.report, during=r.during, locations=r.locations,
     )
 
@@ -209,6 +209,18 @@ def oauth_callback(request: Request):
         f"<code>SHOPIFY_TOKEN_{c.key.upper()}</code>:</p>"
         f"<pre>{token}</pre>"
     )
+
+
+@app.post("/cleanup")
+def cleanup(x_run_all_token: Optional[str] = Header(None)):
+    """Permanently delete ALL report sheets in the Shared Drive. Gated by the
+    same shared secret as /run-all. Use to clear test runs / start fresh."""
+    expected = os.environ.get("RUN_ALL_TOKEN")
+    if expected and x_run_all_token != expected:
+        raise HTTPException(403, "invalid run-all token")
+    deleted = SheetsWriter().delete_reports(_folder_id())
+    log.info("cleanup deleted %d sheets", deleted)
+    return {"deleted": deleted}
 
 
 @app.post("/run-all")

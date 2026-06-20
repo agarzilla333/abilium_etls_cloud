@@ -44,12 +44,10 @@ _GRAPHQL = """
 query RunShopifyQL($query: String!) {
   shopifyqlQuery(query: $query) {
     __typename
-    parseErrors { code message }
-    ... on TableResponse {
-      tableData {
-        columns { name dataType displayName }
-        rowData
-      }
+    parseErrors
+    tableData {
+      columns { name dataType displayName }
+      rows
     }
   }
 }
@@ -99,5 +97,6 @@ def run_shopifyql(
         )
 
     columns = [col["name"] for col in table["columns"]]
-    df = pd.DataFrame(table.get("rowData") or [], columns=columns)
+    rows = table.get("rows") or table.get("rowData") or []  # tolerate either field name
+    df = pd.DataFrame(rows, columns=columns)
     return df.rename(columns={k: v for k, v in FIELD_TO_HEADER.items() if k in df.columns})

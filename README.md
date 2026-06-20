@@ -130,6 +130,23 @@ Naming must stay consistent: `token_secret` uses hyphens (`shopify-token-new-cli
 the OAuth-secret container uses the key with an underscore (`new_client-oauth-client-secret`),
 the env var is upper-cased (`SHOPIFY_CLIENT_ID_NEW_CLIENT`). Steps 7–8 keep these in sync.
 
+## 🗑️  BULK-DELETE ALL REPORT SHEETS
+
+Every run creates a fresh sheet, so the Shared Drive accumulates them. To wipe
+**all** report sheets and start clean, POST to `/cleanup` with the run-all token
+(the runtime service account does the deletion — no local Drive auth needed):
+
+```bash
+TOKEN=$(awk -F'"' '/run_all_token/{print $2}' infra/terraform.tfvars)
+curl -X POST https://abilium-etl-zbhofw3ooa-uc.a.run.app/cleanup -H "X-Run-All-Token: $TOKEN"
+# -> {"deleted": 42}
+```
+
+⚠️ This **trashes every** report sheet in the output Shared Drive (not just test
+runs) — they leave the Drive view and the Shared Drive trash auto-purges after 30
+days (a Manager can empty it sooner). They regenerate on the next `/run` or monthly
+`/run-all`, so it's safe to clear anytime.
+
 ## Endpoints
 
 | Endpoint | Auth | Purpose |
@@ -137,4 +154,5 @@ the env var is upper-cased (`SHOPIFY_CLIENT_ID_NEW_CLIENT`). Steps 7–8 keep th
 | `GET /health`, `GET /options` | none | liveness; dropdown data |
 | `POST /run` | Google ID token (domain + allow-list) | one report from the UI |
 | `POST /run-all` | `X-Run-All-Token` header | monthly batch (Scheduler) |
+| `POST /cleanup` | `X-Run-All-Token` header | delete all report sheets (see above) |
 | `GET /oauth/install?client=<key>` → `/oauth/callback` | Shopify HMAC + state | capture offline token |
