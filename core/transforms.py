@@ -13,7 +13,7 @@ import collections
 import re
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import List
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -47,6 +47,9 @@ class Report:
     kind: str  # "sales" | "inventory"
     tabs: "OrderedDict[str, pd.DataFrame]" = field(default_factory=OrderedDict)
     charts: List[ChartSpec] = field(default_factory=list)
+    # tab name -> indent level (0 = top) per data row, for tabs laid out as a
+    # nested section hierarchy. Tabs absent here are flat (no indenting/bolding).
+    sections: Dict[str, List[int]] = field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------- #
@@ -66,17 +69,37 @@ def _build_vendor_regex(vendors) -> str:
     return "(" + "|".join(parts) + ")"
 
 
-def _sales_group(df: pd.DataFrame, key: str, label: str) -> pd.DataFrame:
-    """units = 1 per row (group size); total = sum of Net sales; sorted desc."""
-    g = (
-        df.groupby(key, dropna=False)[NET_SALES]
-        .agg(units="size", total="sum")
-        .sort_values("total", ascending=False)
-        .reset_index()
-    )
-    g[key] = g[key].astype(str)
-    g.columns = [label, "Units", "Total Sales"]
-    return g
+def _sectioned_table(
+    df: pd.DataFrame, columns: List[str], label_header: str
+) -> Tuple[pd.DataFrame, List[int]]:
+    """Render a nested group-by as one indented table (a "section" per top-level
+    group). Groups by ``columns`` in order; each level is sorted by Total Sales
+    desc. ``units`` = 1 per row (group size), ``total`` = sum of Net sales.
+
+    Returns ``(frame, levels)`` where ``frame`` has columns
+    ``[label_header, "Units", "Total Sales"]`` and ``levels[i]`` is the indent
+    depth (0 = top) of data row ``i``. Because every parent's Units/Total equal
+    the sum of its children, each section ties back to its top-level total.
+    """
+    rows: List[list] = []
+    levels: List[int] = []
+
+    def recurse(sub: pd.DataFrame, depth: int) -> None:
+        col = columns[depth]
+        grp = (
+            sub.groupby(col, dropna=False)[NET_SALES]
+            .agg(units="size", total="sum")
+            .sort_values("total", ascending=False)
+        )
+        for key, agg in grp.iterrows():
+            rows.append(["    " * depth + str(key), int(agg["units"]), float(agg["total"])])
+            levels.append(depth)
+            if depth + 1 < len(columns):
+                recurse(sub[sub[col] == key], depth + 1)
+
+    recurse(df, 0)
+    frame = pd.DataFrame(rows, columns=[label_header, "Units", "Total Sales"])
+    return frame, levels
 
 
 def sales_by_location(df: pd.DataFrame) -> Report:
@@ -124,11 +147,33 @@ def sales_by_location(df: pd.DataFrame) -> Report:
 
     # Anything still missing -> bucket so we never drop sales rows.
     df["vendor_final"] = vendor_filled.fillna("unknown")
+    # Normalized string keys for the section group-bys (no NaN, so the recursive
+    # equality filter in _sectioned_table is safe).
+    df["product_type_key"] = df[PRODUCT_TYPE].fillna("unknown").astype(str)
+    df["channel_key"] = df[SALES_CHANNEL].fillna("unknown").astype(str)
+
+    # Each tab is a nested hierarchy: the top level is the tab's headline grouping
+    # (and what its pie chart plots); deeper levels break each section down so the
+    # children sum back to their parent.
+    vendor_tab, vendor_levels = _sectioned_table(
+        df, ["vendor_final", "product_type_key"], "Vendor"
+    )
+    product_tab, product_levels = _sectioned_table(
+        df, ["product_type_key", "vendor_final"], "Product Type"
+    )
+    channel_tab, channel_levels = _sectioned_table(
+        df, ["channel_key", "vendor_final", "product_type_key"], "Sales Channel"
+    )
 
     report = Report(kind="sales")
-    report.tabs["By Vendor"] = _sales_group(df, "vendor_final", "Vendor")
-    report.tabs["By Product"] = _sales_group(df, PRODUCT_TYPE, "Product Type")
-    report.tabs["By Channel"] = _sales_group(df, SALES_CHANNEL, "Sales Channel")
+    report.tabs["By Vendor"] = vendor_tab
+    report.tabs["By Product"] = product_tab
+    report.tabs["By Channel"] = channel_tab
+    report.sections = {
+        "By Vendor": vendor_levels,
+        "By Product": product_levels,
+        "By Channel": channel_levels,
+    }
     report.charts = [
         ChartSpec("By Vendor", "Total Sales by Vendor", "Vendor", "Total Sales"),
         ChartSpec("By Product", "Total Sales by Product Type", "Product Type", "Total Sales"),

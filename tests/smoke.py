@@ -24,6 +24,23 @@ def test_queries():
     print("queries: OK")
 
 
+def _assert_sections_tie(rep, tab):
+    """Every parent row's Total Sales == the sum of its direct children."""
+    df = rep.tabs[tab]
+    levels = rep.sections[tab]
+    totals = list(df["Total Sales"])
+    for i in range(len(levels)):
+        child_sum, has_child = 0.0, False
+        for j in range(i + 1, len(levels)):
+            if levels[j] <= levels[i]:
+                break  # left this section
+            if levels[j] == levels[i] + 1:
+                child_sum += totals[j]
+                has_child = True
+        if has_child:
+            assert abs(child_sum - totals[i]) < 1e-6, (tab, df.iloc[i, 0], child_sum, totals[i])
+
+
 def test_sales():
     df = pd.DataFrame({
         "Product title at time of sale": ["Acme Tee", "Acme Tee", "Globex Mug", "Mystery Item"],
@@ -34,12 +51,21 @@ def test_sales():
         "Sales channel": ["Online", "Online", "POS", "POS"],
     })
     rep = sales_by_location(df)
+    # Top-level (level-0) rows carry the headline totals; set_index hits them
+    # since they're un-indented (children are prefixed with spaces).
     by_vendor = rep.tabs["By Vendor"].set_index("Vendor")
     # Acme: rows 1,2 (backfill) + row 4 (regex from "acme special") = 3 units, 37.0
     assert int(by_vendor.loc["acme", "Units"]) == 3, by_vendor
     assert abs(by_vendor.loc["acme", "Total Sales"] - 37.0) < 1e-9, by_vendor
     assert int(by_vendor.loc["globex", "Units"]) == 1
     assert set(rep.tabs) == {"By Vendor", "By Product", "By Channel"}
+
+    # Sections: acme breaks down into one Apparel child summing to 37.0, and every
+    # parent in every tab equals the sum of its children (channel goes 3 levels).
+    assert "    Apparel" in list(rep.tabs["By Vendor"]["Vendor"])
+    assert max(rep.sections["By Channel"]) == 2  # channel -> vendor -> product type
+    for tab in ("By Vendor", "By Product", "By Channel"):
+        _assert_sections_tie(rep, tab)
     print("sales: OK")
 
 

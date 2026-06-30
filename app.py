@@ -66,6 +66,17 @@ def _dedupe() -> bool:
     return os.environ.get("INVENTORY_DEDUPE", "") == "1"
 
 
+def _verify_run_all_token(provided: Optional[str]) -> None:
+    """Gate /run-all and /cleanup on the shared secret. Fails closed: an unset
+    RUN_ALL_TOKEN rejects all callers rather than leaving these public (the
+    service is allUsers-invokable), since /cleanup is destructive."""
+    expected = os.environ.get("RUN_ALL_TOKEN")
+    if not expected:
+        raise HTTPException(500, "RUN_ALL_TOKEN not configured")
+    if not secrets.compare_digest(provided or "", expected):
+        raise HTTPException(403, "invalid run-all token")
+
+
 # --------------------------------------------------------------------------- #
 # Auth for /run — verify a Google Identity ID token, then domain + allow-list.
 # --------------------------------------------------------------------------- #
@@ -75,6 +86,10 @@ def verify_user(authorization: Optional[str] = Header(None)) -> str:
     token = authorization.split(" ", 1)[1].strip()
 
     audience = os.environ.get("OAUTH_CLIENT_ID")
+    if not audience:
+        # Fail closed: without an audience, verify_oauth2_token skips audience
+        # checks and would accept any valid Google ID token.
+        raise HTTPException(500, "OAUTH_CLIENT_ID not configured")
     try:
         claims = google_id_token.verify_oauth2_token(token, ga_requests.Request(), audience)
     except Exception as exc:  # noqa: BLE001 — surface as 401
@@ -215,9 +230,7 @@ def oauth_callback(request: Request):
 def cleanup(x_run_all_token: Optional[str] = Header(None)):
     """Permanently delete ALL report sheets in the Shared Drive. Gated by the
     same shared secret as /run-all. Use to clear test runs / start fresh."""
-    expected = os.environ.get("RUN_ALL_TOKEN")
-    if expected and x_run_all_token != expected:
-        raise HTTPException(403, "invalid run-all token")
+    _verify_run_all_token(x_run_all_token)
     deleted = SheetsWriter().delete_reports(_folder_id())
     log.info("cleanup deleted %d sheets", deleted)
     return {"deleted": deleted}
@@ -229,9 +242,7 @@ def run_all(x_run_all_token: Optional[str] = Header(None)):
     defaults (sales=last_month, inventory=today). The service is publicly invokable
     (so the browser can reach /run), so /run-all is gated by a shared secret that
     only Cloud Scheduler sends."""
-    expected = os.environ.get("RUN_ALL_TOKEN")
-    if expected and x_run_all_token != expected:
-        raise HTTPException(403, "invalid run-all token")
+    _verify_run_all_token(x_run_all_token)
 
     folder = _folder_id()
     writer = SheetsWriter()  # reuse one authenticated client across the batch
