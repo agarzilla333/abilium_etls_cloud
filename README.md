@@ -62,17 +62,17 @@ gcloud auth login && gcloud auth application-default login
 # 1. test
 python -m tests.smoke
 
-# 2. build & push a new image (pick the next tag, e.g. v17)
-gcloud builds submit . --tag us-central1-docker.pkg.dev/abilium-etls/abilium/app:v17 --project abilium-etls
+# 2. build & push a new image (pick the next tag, e.g. v18)
+gcloud builds submit . --tag us-central1-docker.pkg.dev/abilium-etls/abilium/app:v18 --project abilium-etls
 
 # 3. deploy that image
-cd infra && terraform apply -var image_tag=v17
+cd infra && terraform apply -var image_tag=v18
 
 # 4. verify
 curl https://abilium-etl-zbhofw3ooa-uc.a.run.app/health
 ```
 
-Equivalent via the Makefile (from `infra/`): `make build TAG=v17 && make deploy TAG=v17`.
+Equivalent via the Makefile (from `infra/`): `make build TAG=v18 && make deploy TAG=v18`.
 
 - **Config-only change** (e.g. an env var in `terraform.tfvars`): no rebuild — just
   `terraform apply -var image_tag=<current tag>`.
@@ -115,8 +115,8 @@ Say the new client key is `new_client` with store `xyz.myshopify.com`.
 **Deploy + secrets + token:**
 9. Rebuild (clients.json changed) and deploy:
    ```bash
-   gcloud builds submit . --tag us-central1-docker.pkg.dev/abilium-etls/abilium/app:v17 --project abilium-etls
-   cd infra && terraform apply -var image_tag=v17   # creates the new secret containers
+   gcloud builds submit . --tag us-central1-docker.pkg.dev/abilium-etls/abilium/app:v18 --project abilium-etls
+   cd infra && terraform apply -var image_tag=v18   # creates the new secret containers
    ```
 10. Load the Client Secret:
     ```bash

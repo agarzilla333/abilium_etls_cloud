@@ -25,10 +25,11 @@ def test_queries():
 
 
 def _assert_sections_tie(rep, tab):
-    """Every parent row's Total Sales == the sum of its direct children."""
+    """Every parent row's value == the sum of its direct children (value is the
+    last column: Total Sales for sales, Total Retail Value for inventory)."""
     df = rep.tabs[tab]
     levels = rep.sections[tab]
-    totals = list(df["Total Sales"])
+    totals = list(df.iloc[:, -1])
     for i in range(len(levels)):
         child_sum, has_child = 0.0, False
         for j in range(i + 1, len(levels)):
@@ -80,11 +81,17 @@ def test_inventory():
     })
     rep = inventory_by_location(df)
     inv = rep.tabs["inventory"].set_index("Designers")
+    # Top-level designer rows (un-indented) carry the rolled-up totals.
     assert abs(inv.loc["jungmaven", "Total Retail Value"] - 50.0) < 1e-9, inv
     assert int(inv.loc["jungmaven", "Units"]) == 5
     assert "drop me" not in inv.index  # units==0 filtered out
     # one granular tab per designer present
     assert "jungmaven" in rep.tabs and "hanky panky" in rep.tabs
+    # sectioned: jungmaven expands into its Hemp child summing back to 50.0, and
+    # every parent equals the sum of its children on both sectioned tabs.
+    assert "    Hemp" in list(rep.tabs["inventory"]["Designers"])
+    for tab in ("inventory", "by product"):
+        _assert_sections_tie(rep, tab)
     print("inventory: OK")
 
 

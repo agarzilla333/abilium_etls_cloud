@@ -13,7 +13,7 @@ import collections
 import re
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -70,35 +70,43 @@ def _build_vendor_regex(vendors) -> str:
 
 
 def _sectioned_table(
-    df: pd.DataFrame, columns: List[str], label_header: str
+    df: pd.DataFrame,
+    columns: List[str],
+    label_header: str,
+    value_col: str,
+    value_label: str,
+    units_col: Optional[str] = None,
 ) -> Tuple[pd.DataFrame, List[int]]:
     """Render a nested group-by as one indented table (a "section" per top-level
-    group). Groups by ``columns`` in order; each level is sorted by Total Sales
-    desc. ``units`` = 1 per row (group size), ``total`` = sum of Net sales.
+    group). Groups by ``columns`` in order; each level is sorted by value desc.
+    ``value`` = sum of ``value_col``. ``Units`` = the group's row count when
+    ``units_col`` is None (sales: one row per sale) else the sum of ``units_col``
+    (inventory: ending-unit counts).
 
     Returns ``(frame, levels)`` where ``frame`` has columns
-    ``[label_header, "Units", "Total Sales"]`` and ``levels[i]`` is the indent
-    depth (0 = top) of data row ``i``. Because every parent's Units/Total equal
-    the sum of its children, each section ties back to its top-level total.
+    ``[label_header, "Units", value_label]`` and ``levels[i]`` is the indent depth
+    (0 = top) of data row ``i``. Because every parent's Units/value equal the sum
+    of its children, each section ties back to its top-level total.
     """
     rows: List[list] = []
     levels: List[int] = []
 
     def recurse(sub: pd.DataFrame, depth: int) -> None:
         col = columns[depth]
-        grp = (
-            sub.groupby(col, dropna=False)[NET_SALES]
-            .agg(units="size", total="sum")
+        grouped = sub.groupby(col, dropna=False)
+        units = grouped.size() if units_col is None else grouped[units_col].sum()
+        agg = (
+            pd.DataFrame({"units": units, "total": grouped[value_col].sum()})
             .sort_values("total", ascending=False)
         )
-        for key, agg in grp.iterrows():
-            rows.append(["    " * depth + str(key), int(agg["units"]), float(agg["total"])])
+        for key, r in agg.iterrows():
+            rows.append(["    " * depth + str(key), int(r["units"]), float(r["total"])])
             levels.append(depth)
             if depth + 1 < len(columns):
                 recurse(sub[sub[col] == key], depth + 1)
 
     recurse(df, 0)
-    frame = pd.DataFrame(rows, columns=[label_header, "Units", "Total Sales"])
+    frame = pd.DataFrame(rows, columns=[label_header, "Units", value_label])
     return frame, levels
 
 
@@ -156,13 +164,13 @@ def sales_by_location(df: pd.DataFrame) -> Report:
     # (and what its pie chart plots); deeper levels break each section down so the
     # children sum back to their parent.
     vendor_tab, vendor_levels = _sectioned_table(
-        df, ["vendor_final", "product_type_key"], "Vendor"
+        df, ["vendor_final", "product_type_key"], "Vendor", NET_SALES, "Total Sales"
     )
     product_tab, product_levels = _sectioned_table(
-        df, ["product_type_key", "vendor_final"], "Product Type"
+        df, ["product_type_key", "vendor_final"], "Product Type", NET_SALES, "Total Sales"
     )
     channel_tab, channel_levels = _sectioned_table(
-        df, ["channel_key", "vendor_final", "product_type_key"], "Sales Channel"
+        df, ["channel_key", "vendor_final", "product_type_key"], "Sales Channel", NET_SALES, "Total Sales"
     )
 
     report = Report(kind="sales")
@@ -236,18 +244,32 @@ def inventory_by_location(df: pd.DataFrame, *, dedupe: bool = False) -> Report:
     if dedupe:
         df = _dedupe_inventory(df)
 
-    inventory_df = _inv_group(df, [PRODUCT_VENDOR], ["Designers"])
-    by_product_df = _inv_group(df, [PRODUCT_TYPE], ["Product Type"])
+    # Same collapsible sections as the sales report: each top-level row breaks
+    # down a level deeper, and the children sum back to it. Units sums the
+    # ending-unit counts; value is retail value.
+    inventory_tab, inventory_levels = _sectioned_table(
+        df, [PRODUCT_VENDOR, PRODUCT_TYPE], "Designers",
+        INV_RETAIL, "Total Retail Value", units_col=INV_UNITS,
+    )
+    by_product_tab, by_product_levels = _sectioned_table(
+        df, [PRODUCT_TYPE, PRODUCT_VENDOR], "Product Type",
+        INV_RETAIL, "Total Retail Value", units_col=INV_UNITS,
+    )
     granular_df = _inv_group(
         df, [PRODUCT_VENDOR, PRODUCT_TYPE, VARIANT_TITLE], ["Product Vendor", "Product Type", "Product Title"]
     )
 
     report = Report(kind="inventory")
-    report.tabs["inventory"] = inventory_df
-    report.tabs["by product"] = by_product_df
+    report.tabs["inventory"] = inventory_tab
+    report.tabs["by product"] = by_product_tab
+    report.sections = {
+        "inventory": inventory_levels,
+        "by product": by_product_levels,
+    }
 
-    # One granular tab per designer, alphabetical (after the inventory + by product tabs).
-    for designer in sorted(inventory_df["Designers"], key=lambda s: str(s).lower()):
+    # One granular tab per designer (Product Type/Title detail), alphabetical
+    # (after the inventory + by product tabs).
+    for designer in sorted(df[PRODUCT_VENDOR].unique(), key=lambda s: str(s).lower()):
         sub = granular_df[granular_df["Product Vendor"] == designer][
             ["Product Type", "Product Title", "Units", "Total Retail Value"]
         ].reset_index(drop=True)
